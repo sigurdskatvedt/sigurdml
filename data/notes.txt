@@ -1,0 +1,9 @@
+train_c sine første rader har NaN under pv_measurement 
+=> sikkert noe med at stasjon C startet senere enn A og B.
+
+
+X_train_observed_a starter et halvt år senere enn b og c, mens 
+X_train_observed_b og c slutter et halvt år tidligere enn a
+
+
+datasett med snødata med NaN, 
