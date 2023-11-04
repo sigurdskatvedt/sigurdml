@@ -1,9 +1,10 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pylab as plt
-from catboost import CatBoostRegressor, Pool
-from sklearn.ensemble import RandomForestRegressor
+import h2o
+from h2o.automl import H2OAutoML
 from sklearn.model_selection import train_test_split
+
 
 pd.set_option("display.max_rows", 200)
 pd.set_option("display.max_columns", 200)
@@ -134,11 +135,11 @@ def preprocess_data(targets, observed, estimated, test):
     return merged_data, test_resampled
 
 
+h2o.init()
+
 locations = ["A", "B", "C"]
 location_mapping = {"A": 1, "B": 2, "C": 3}
 all_predictions = []
-all_predictions_rf = []
-
 
 for loc in locations:
     # Load your data
@@ -146,12 +147,6 @@ for loc in locations:
     X_train_estimated = pd.read_parquet(f"data/{loc}/X_train_estimated.parquet")
     X_train_observed = pd.read_parquet(f"data/{loc}/X_train_observed.parquet")
     X_test_estimated = pd.read_parquet(f"data/{loc}/X_test_estimated.parquet")
-
-    # save as csv for analysis
-    """ train.to_csv(f'{loc}_csv/train_targets.csv')
-    X_train_estimated.to_csv(f'{loc}_csv/X_train_estimated.csv')
-    X_train_observed.to_csv(f'{loc}_csv/X_train_observed.csv')
-    X_test_estimated.to_csv(f'{loc}_csv/X_test_estimated.csv') """
 
     # Preprocess data
     X_train, X_test = preprocess_data(
@@ -174,44 +169,32 @@ for loc in locations:
         X_train, y_train, test_size=0.2, random_state=42
     )
 
-    # Create catboost Pool objects
-    train_pool = Pool(
-        data=X_train_data, label=y_train_data, cat_features=["location", "estimated"]
+    # Convert pandas dataframes to h2o frames
+    h2o_train = h2o.H2OFrame(
+        pd.concat(
+            [X_train_data, pd.Series(y_train_data, name="pv_measurement")], axis=1
+        )
     )
-    eval_pool = Pool(
-        data=X_eval_data, label=y_eval_data, cat_features=["location", "estimated"]
+    h2o_valid = h2o.H2OFrame(
+        pd.concat([X_eval_data, pd.Series(y_eval_data, name="pv_measurement")], axis=1)
     )
+    h2o_test = h2o.H2OFrame(X_test)
 
-    # Initialize and Train model
-    # categorical_features = ['dew_or_rime:idx', 'elevation:m', 'is_day:idx', 'is_in_shadow:idx', 'snow_drift:idx', 'wind_speed_w_1000hPa:ms']
+    # Initialize and train H2O AutoML model
+    aml = H2OAutoML(max_runtime_secs=3600, seed=42)
+    aml.train(y="pv_measurement", training_frame=h2o_train, validation_frame=h2o_valid)
 
-    model = CatBoostRegressor(depth=9, iterations=1000, loss_function="MAE")
-    model.fit(train_pool, use_best_model=True, eval_set=eval_pool)
+    # Make predictions using H2O AutoML model
+    predictions = aml.predict(h2o_test)
 
-    # Make predictions using X_test_estimated data
-    predictions = model.predict(X_test)
+    # Convert h2o frame to pandas dataframe
+    predictions_df = h2o.as_list(predictions)
 
     # Store the predictions in all_predictions list
-    all_predictions.append(predictions)
-
-    """ 
-    # Initialize and Train RandomForest model
-    model_rf = RandomForestRegressor(n_estimators=100, random_state=42)
-    model_rf.fit(X_train, y_train)
-
-    # Make predictions using X_test data
-    predictions_rf = model_rf.predict(X_test)
-    
-    # Store the RandomForest predictions in all_predictions_rf list
-    all_predictions_rf.append(predictions_rf) 
-    
-    final_predictions_rf = np.concatenate(all_predictions_rf)
-    
-    average_predictions = (np.array(final_predictions) + np.array(final_predictions_rf)) / 2.0
-    """
+    all_predictions.append(predictions_df)
 
 # Concatenate all predictions
-final_predictions = np.concatenate(all_predictions)
+final_predictions = pd.concat(all_predictions)
 
 
 # Save the final_predictions to CSV
